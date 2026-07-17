@@ -84,5 +84,50 @@ class TestRouteToVendorSentinel(unittest.TestCase):
         self.assertIn("NO_DATA_AVAILABLE", result)
 
 
+@pytest.mark.unit
+class TestLoadOhlcvMultiSource(unittest.TestCase):
+    """load_ohlcv tries multiple sources for CN shares (akshare -> yfinance)."""
+
+    def _df(self):
+        return pd.DataFrame({
+            "Date": pd.to_datetime(["2026-07-09", "2026-07-10"]),
+            "Open": [9.0, 9.1], "High": [9.5, 9.6],
+            "Low": [8.9, 9.0], "Close": [9.2, 9.3], "Volume": [1000, 2000],
+        })
+
+    def test_cn_falls_back_to_yahoo_when_akshare_fails(self):
+        ok = self._df()
+        with mock.patch.object(
+            stockstats_utils, "_load_ohlcv_akshare",
+            side_effect=NoMarketDataError("002185.SZ", "002185", "akshare down"),
+        ), mock.patch.object(
+            stockstats_utils, "_load_ohlcv_yahoo", return_value=ok,
+        ) as yf_loader:
+            out = stockstats_utils.load_ohlcv("002185.SZ", "2026-07-10")
+        self.assertFalse(out.empty)
+        yf_loader.assert_called_once()  # backup actually tried
+
+    def test_cn_does_not_call_yahoo_when_akshare_succeeds(self):
+        ok = self._df()
+        with mock.patch.object(
+            stockstats_utils, "_load_ohlcv_akshare", return_value=ok,
+        ), mock.patch.object(
+            stockstats_utils, "_load_ohlcv_yahoo", return_value=ok,
+        ) as yf_loader:
+            stockstats_utils.load_ohlcv("002185.SZ", "2026-07-10")
+        yf_loader.assert_not_called()
+
+    def test_all_sources_fail_reraises(self):
+        with mock.patch.object(
+            stockstats_utils, "_load_ohlcv_akshare",
+            side_effect=NoMarketDataError("002185.SZ", "002185", "akshare down"),
+        ), mock.patch.object(
+            stockstats_utils, "_load_ohlcv_yahoo",
+            side_effect=NoMarketDataError("002185.SZ", "002185.SZ", "yahoo no rows"),
+        ):
+            with self.assertRaises(NoMarketDataError):
+                stockstats_utils.load_ohlcv("002185.SZ", "2026-07-10")
+
+
 if __name__ == "__main__":
     unittest.main()

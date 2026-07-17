@@ -71,9 +71,25 @@ Our framework decomposes complex trading tasks into specialized roles.
 
 ### Analyst Team
 - Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood.
-- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
+- Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood. For China A-shares, 股吧 (eastmoney guba) replaces StockTwits + Reddit.
+- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions. Calls `web_search` to verify any key factual claim against current sources.
 - Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
+- Macro & Policy Analyst (opt-in): Quantifies the top-down backdrop — monetary, fiscal, regulatory, real-economy, liquidity — that bounds the instrument's sector. Bound to `web_search` + `get_macro_indicators` so it can verify or supplement pre-fetched akshare snapshot. Toggle via `selected_analysts=("...", "macro_policy")` or by selecting the analyst in the CLI.
+
+### China A-share support
+
+TradingAgents is data-source-agnostic via vendor chains. For China A-shares (`600519.SS`, `002594.SZ`, ...), every data category routes through `akshare,yfinance` by default:
+
+| Category | CN vendor | What it returns |
+|---|---|---|
+| OHLCV & indicators | `akshare` (sina + stockstats) | minute-bar latest close + 200 days of indicators |
+| Fundamentals | `akshare` (`stock_financial_analysis_indicator`, `stock_financial_report_sina`) | per-share metrics, three-statement abstracts |
+| News (ticker-specific) | `akshare` (`stock_news_em`) | eastmoney headlines filtered to date range |
+| Macro (LPR/SHIBOR/M2/PMI/GDP/CPI) | `akshare` (free public endpoints) | series with date and value |
+| Retail sentiment | eastmoney `guba` (HTML) | per-post title / read count / reply count |
+| Live web search | DeepSeek `web_search_20250305` | AI summary + source URLs |
+
+`_no_proxy()` context manager wraps every domestic call so CN endpoints bypass VPN/Clash. TLS fingerprinting (eastmoney `push2his`) is avoided by using sina backend for OHLCV.
 
 <p align="center">
   <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
@@ -177,6 +193,8 @@ python -m cli.main     # alternative: run directly from source
 ```
 You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
 
+**China A-share example**: select the `Macro Policy` analyst in step 4 to enable the top-down macro & policy section; enter a CN ticker like `002594.SZ` in step 1; akshare + guba + DeepSeek web search will be used automatically.
+
 ### Markets and tickers
 
 TradingAgents works with any market Yahoo Finance covers, using the exchange-suffixed ticker. Company identity and the alpha benchmark resolve automatically per market.
@@ -267,6 +285,29 @@ config = DEFAULT_CONFIG.copy()
 config["checkpoint_enabled"] = True
 ta = TradingAgentsGraph(config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")
+```
+
+## Live Web Search
+
+The News and Macro & Policy analysts can call `web_search(query)` to retrieve
+current information on demand — useful for fact-checking claims from training
+data, finding real-time industry news, or exploring topics not covered by the
+pre-fetched data blocks.
+
+The tool wraps DeepSeek's native web search API
+(`api.deepseek.com/anthropic/v1/messages` + `web_search_20250305` tool type),
+which returns an AI-generated summary plus source URLs.
+
+**Configuration**: set `DEEPSEEK_API_KEY` (same key used for the DeepSeek LLM
+provider). If unset, the tool degrades gracefully — the analyst sees a clear
+"web search unavailable" message instead of an opaque failure, so it never
+fabricates sources.
+
+```bash
+export DEEPSEEK_API_KEY=...        # enables live web search for analysts
+# Optional overrides:
+export WEBSEARCH_API_KEY=...       # generic fallback key
+export WEBSEARCH_MODEL=...         # default: deepseek-v4-flash
 ```
 
 ## Reproducibility

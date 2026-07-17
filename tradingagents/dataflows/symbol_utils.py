@@ -141,3 +141,100 @@ def normalize_symbol(raw: str) -> str:
 def is_yahoo_safe(symbol: str) -> bool:
     """True when ``symbol`` only contains characters Yahoo symbols use."""
     return bool(symbol) and _YAHOO_SAFE.fullmatch(symbol) is not None
+
+
+# ---------------------------------------------------------------------------
+# China A/B-share (and Beijing exchange) symbols.
+#
+# Users type Yahoo-style suffixed symbols (``002594.SZ``, ``600519.SS``) so the
+# existing Yahoo path keeps working; each domestic vendor needs a different
+# shape, so these helpers produce the per-vendor canonical form from any input.
+#
+#   user types        akshare-sina      akshare-emweb / guba    xueqiu
+#   ---------------   ---------------   ----------------------  ----------
+#   002594.SZ         sz002594          002594                  SZ002594
+#   600519.SS         sh600519          600519                  SH600519
+#
+# Exchange is inferred from the suffix when present, else from the leading
+# digits of a bare 6-digit code (main board + STAR + ChiNext + Beijing).
+# ---------------------------------------------------------------------------
+
+_CN_SUFFIX_EXCHANGE = {".SZ": "SZ", ".SH": "SH", ".BJ": "BJ"}
+# Bare 6-digit routing by first digit(s). Good enough for the boards retail
+# traders analyze; 9xxxxx/900xxx (Shanghai B) map to SH, 200xxx (Shenzhen B)
+# to SZ, 8/4/920 (Beijing) to BJ.
+_CN_LEADING_EXCHANGE = {
+    "6": "SH", "9": "SH",           # Shanghai main / B
+    "0": "SZ", "2": "SZ", "3": "SZ",  # Shenzhen main / B / ChiNext
+    "8": "BJ", "4": "BJ",            # Beijing Stock Exchange
+}
+
+
+def cn_code6(raw: str) -> str | None:
+    """Return the bare 6-digit A/B-share code (``"002594"``) or None.
+
+    Accepts ``002594``, ``002594.SZ``, ``SZ002594``, ``sz002594``. Purely
+    syntactic — no network calls.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    s = raw.strip().upper().lstrip("+")
+    # strip an exchange prefix if present
+    for pre in ("SZ", "SH", "BJ"):
+        if s.startswith(pre):
+            s = s[len(pre):]
+            break
+    # strip a Yahoo-style CN suffix only (.SH/.SS/.SZ/.BJ); leave arbitrary
+    # suffixes (e.g. BRK.B, 002594.XX) intact so they are not misread as CN.
+    # .SS accepted as legacy alias for .SH (Yahoo historical convention).
+    for suf in (".SH", ".SS", ".SZ", ".BJ"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+    return s if s.isdigit() and len(s) == 6 else None
+
+
+def is_cn_share(raw: str) -> bool:
+    """True when ``raw`` looks like a China A/B/Beijing-share symbol.
+
+    Relies on ``cn_code6``, which handles all standard forms (bare 6-digit,
+    ``.SZ`` / ``.SS`` / ``.BJ`` suffix, ``SZ`` / ``SH`` prefix). A suffix-only
+    check is deliberately avoided — it would return True for non-CN symbols
+    accidentally ending in ``.SZ`` (e.g. ``BRK.B.SZ``).
+    """
+    return cn_code6(raw) is not None
+
+
+def _cn_exchange(raw: str) -> str | None:
+    """Resolve the exchange tag (``SH``/``SZ``/``BJ``) for a CN symbol."""
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().upper()
+    for suf, ex in _CN_SUFFIX_EXCHANGE.items():
+        if s.endswith(suf):
+            return ex
+    for pre, ex in (("SZ", "SZ"), ("SH", "SH"), ("BJ", "BJ")):
+        if s.startswith(pre):
+            return ex
+    code = cn_code6(raw)
+    if code:
+        return _CN_LEADING_EXCHANGE.get(code[0])
+    return None
+
+
+def cn_sina_symbol(raw: str) -> str | None:
+    """akshare sina-backend form: lowercase prefixed ``sz002594`` / ``sh600519``."""
+    code = cn_code6(raw)
+    ex = _cn_exchange(raw)
+    if not code or not ex:
+        return None
+    return f"{ex.lower()}{code}"
+
+
+def cn_xueqiu_symbol(raw: str) -> str | None:
+    """xueqiu form: uppercase prefixed ``SZ002594`` / ``SH600519``."""
+    code = cn_code6(raw)
+    ex = _cn_exchange(raw)
+    if not code or not ex:
+        return None
+    return f"{ex}{code}"

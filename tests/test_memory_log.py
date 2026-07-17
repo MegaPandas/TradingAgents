@@ -93,6 +93,7 @@ def _structured_pm_llm(captured: dict, decision: PortfolioDecision | None = None
             rating=PortfolioRating.HOLD,
             executive_summary="Hold the position; await catalyst.",
             investment_thesis="Balanced view; neither side carried the debate.",
+            operation_rules="Hold until a catalyst breaks the stalemate.",
         )
     structured = MagicMock()
     structured.invoke.side_effect = lambda prompt: (
@@ -715,6 +716,7 @@ class TestPortfolioManagerInjection:
             executive_summary="Build position gradually over the next two weeks.",
             investment_thesis="AI capex cycle remains intact; institutional flows constructive.",
             price_target=215.0,
+            operation_rules="Add on pullbacks to the 50-day MA; trim on a close below 200.",
             time_horizon="3-6 months",
         )
         llm = _structured_pm_llm(captured, decision)
@@ -724,7 +726,10 @@ class TestPortfolioManagerInjection:
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
         assert "**Investment Thesis**: AI capex cycle" in md
-        assert "**Price Target**: 215.0" in md
+        assert "**Trade Plan**" in md
+        assert "- Target price: 215.0" in md
+        assert "**Operation Rules**" in md
+        assert "Add on pullbacks to the 50-day MA" in md
         assert "**Time Horizon**: 3-6 months" in md
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):

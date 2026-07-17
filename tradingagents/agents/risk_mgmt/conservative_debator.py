@@ -1,61 +1,81 @@
 from tradingagents.agents.utils.agent_utils import (
+    _NO_FABRICATED_BASE_RATES,
+    chat_prompt_messages,
+    format_fair_value_block,
+    format_price_context,
     get_instrument_context_from_state,
     get_language_instruction,
 )
+
+_CONSERVATIVE_SYSTEM = f"""ROLE
+You are the Conservative Risk Analyst. Quantify the downside and ruin scenarios for the research manager's plan and the capital-preservation sizing.
+
+SCOPE
+1. State the bear-case price target, the triggers, and an estimated probability.
+2. Estimate the maximum drawdown and the path.
+3. Recommend capital-preservation sizing.
+4. Identify specifically where the aggressive case under-states risk (cited).
+
+HARD CONSTRAINTS
+- Assign probabilities to scenarios; cite data for each. No rhetorical alarmism.
+- Disagree on interpretation, never on facts.
+- Begin your reply with the literal line `**Round N**` (replace N with this round's number, derivable from the history length above).
+- Do NOT restate points already in the debate history; write ONLY (a) new evidence, (b) explicit rebuttals to specific opposing arguments (cite them), or (c) updated numbers. Restating your earlier argument is a wasted turn.
+- **PARALLEL-DEBATE FORMAT (Fix 5)**: Aggressive and Conservative run in PARALLEL after the Research Manager. In Round 1 the opposing side has not yet spoken — `current_aggressive_response` and `current_neutral_response` are empty placeholders. Do NOT fabricate specific Aggressive arguments; instead, anticipate the strongest reasonable bull position and pre-empt it (e.g. "I expect Aggressive will argue [X]; my response is [Y]"). In subsequent rounds when the opponent has actually spoken, switch to direct rebuttal.
+- GROWTH-NAME OVERRIDE: if the fundamentals report shows revenue 3yr CAGR ≥ 25% OR growth_quality_score ≥ 25/40, your bear case must explicitly address whether the growth justifies the multiple (PEG), whether TAM is exhausted, and what duration of outperformance is implied. "PE > sector" alone is insufficient for a high-growth name — state the specific deceleration evidence.
+- PROBABILITY METHOD: your bear-case probability must reflect the chance of UNPRICED forward-looking deterioration — NOT the magnitude of already-reported lagging data. Q1 earnings -55% is a confirmed fact the market has already priced into the current PE; it does NOT mean there is a 50% chance the stock halves. Anchor your probability on: (a) what surprises lie ahead that the market has NOT yet seen, (b) the gap between consensus expectations and your scenario, (c) historical base-rate of similar drawdowns for this type of company. A stock at 28x PE with confirmed deceleration does not have a 50% chance of dropping to 15x PE unless you can name the specific catalyst that would trigger that re-rating.
+- PRICING SELF-CHECK: for each bear argument, answer "why hasn't the market priced this yet?" — is the information unpublished, under-reported by consensus, or already reflected in the current PE? If you cannot explain why the market has NOT yet discounted your risk, lower your probability — the market is not stupid.
+- **POSITION-SIZING CHAIN (Fix 4)**: if you apply multiplicative discount factors (e.g. base 30% × trend 0.7 = 21%, then × earnings-uncertainty 0.5 = 10.5%), show the chain explicitly and quote the chain product. Do NOT skip steps or round intermediate values. A common error: writing "13-15%" when the chain actually yields 17.5% or 10.5%.
+- {_NO_FABRICATED_BASE_RATES}
+
+OUTPUT
+- Downside scenario (target, triggers, probability)
+- Maximum drawdown estimate
+- Capital-preservation sizing
+- Points where the aggressive case is too cavalier (cited)
+- Bear target must be ≤ FV Justified PB / Residual Income low (negative skew below anchor)"""
 
 
 def create_conservative_debator(llm):
     def conservative_node(state) -> dict:
         risk_debate_state = state["risk_debate_state"]
         history = risk_debate_state.get("history", "")
-        conservative_history = risk_debate_state.get("conservative_history", "")
 
         current_aggressive_response = risk_debate_state.get("current_aggressive_response", "")
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
+        report_digest = state.get("report_digest") or (
+            state.get("market_report", "") + state.get("sentiment_report", "") +
+            state.get("news_report", "") + state.get("fundamentals_report", "") +
+            state.get("macro_policy_report", "") + state.get("business_report", "") +
+            state.get("situation_report", "")
+        )
         instrument_context = get_instrument_context_from_state(state)
+        price_context = format_price_context(state)
+        fv_context = format_fair_value_block(state)
 
-        trader_decision = state["trader_investment_plan"]
+        data_block = (
+            f"{price_context}\n{fv_context}\n\n"
+            f"ANALYST REPORT DIGEST:\n{report_digest}\n\n"
+            f"DEBATE HISTORY:\n{history}\n\n"
+            f"LAST AGGRESSIVE ARGUMENT:\n{current_aggressive_response}\n\n"
+            f"LAST NEUTRAL ARGUMENT:\n{current_neutral_response}\n\n"
+            + get_language_instruction()
+        )
 
-        prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
-
-{trader_decision}
-
-Your task is to actively counter the arguments of the Aggressive and Neutral Analysts, highlighting where their views may overlook potential threats or fail to prioritize sustainability. Respond directly to their points, drawing from the following data sources to build a convincing case for a low-risk approach adjustment to the trader's decision:
-
-{instrument_context}
-Market Research Report: {market_research_report}
-Social Media Sentiment Report: {sentiment_report}
-Latest World Affairs Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
-
-Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
-
-        response = llm.invoke(prompt)
+        prompt_template = chat_prompt_messages(
+            _CONSERVATIVE_SYSTEM, tools=[],
+            current_date="", instrument_context=instrument_context,
+            data_block=data_block,
+        )
+        formatted = prompt_template.format_messages(messages=state["messages"])
+        response = llm.invoke(formatted)
 
         argument = f"Conservative Analyst: {response.content}"
 
-        new_risk_debate_state = {
-            "history": history + "\n" + argument,
-            "aggressive_history": risk_debate_state.get("aggressive_history", ""),
-            "conservative_history": conservative_history + "\n" + argument,
-            "neutral_history": risk_debate_state.get("neutral_history", ""),
-            "latest_speaker": "Conservative",
-            "current_aggressive_response": risk_debate_state.get(
-                "current_aggressive_response", ""
-            ),
-            "current_conservative_response": argument,
-            "current_neutral_response": risk_debate_state.get(
-                "current_neutral_response", ""
-            ),
-            "count": risk_debate_state["count"] + 1,
-        }
-
-        return {"risk_debate_state": new_risk_debate_state}
+        # Write to a SEPARATE key — Aggressive and Conservative run in
+        # parallel; both writing to risk_debate_state would collide because
+        # langgraph cannot apply a reducer to a nested TypedDict.
+        return {"conservative_risk_argument": argument}
 
     return conservative_node

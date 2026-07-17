@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
 from tradingagents.agents.utils.agent_utils import (
+    chat_prompt_messages,
     get_instrument_context_from_state,
     get_language_instruction,
 )
@@ -12,6 +13,23 @@ from tradingagents.agents.utils.structured import (
     invoke_structured_or_freetext,
 )
 
+_RM_SYSTEM = """ROLE
+You are the Research Manager. Adjudicate the bull/bear debate and issue the rating and the strategic actions the trader will act on.
+
+SCOPE
+1. Weigh which side the evidence supports; reserve Hold for genuinely balanced evidence.
+2. Convert the verdict into the 5-tier rating: Buy / Overweight / Hold / Underweight / Sell.
+3. Give the trader concrete strategic actions consistent with the rating (direction + conviction + the report evidence driving it).
+
+HARD CONSTRAINTS
+- Ground the rating in cited points from the debate; introduce no new analysis.
+- Strategic actions must be implementable and reference the evidence.
+
+OUTPUT
+- recommendation (one of Buy / Overweight / Hold / Underweight / Sell)
+- rationale (which arguments carried, cited)
+- strategic_actions (concrete, evidence-anchored)"""
+
 
 def create_research_manager(llm):
     structured_llm = bind_structured(llm, ResearchPlan, "Research Manager")
@@ -19,33 +37,26 @@ def create_research_manager(llm):
     def research_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
         history = state["investment_debate_state"].get("history", "")
-
         investment_debate_state = state["investment_debate_state"]
+        report_digest = state.get("report_digest") or ""
 
-        prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
-
-{instrument_context}
-
----
-
-**Rating Scale** (use exactly one):
-- **Buy**: Strong conviction in the bull thesis; recommend taking or growing the position
-- **Overweight**: Constructive view; recommend gradually increasing exposure
-- **Hold**: Balanced view; recommend maintaining the current position
-- **Underweight**: Cautious view; recommend trimming exposure
-- **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
-
-Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
-
----
-
-**Debate History:**
-{history}""" + get_language_instruction()
+        prompt_template = chat_prompt_messages(
+            _RM_SYSTEM, tools=[],
+            current_date="", instrument_context=instrument_context,
+            data_block=(
+                f"ANALYST REPORT DIGEST (pre-compressed):\n{report_digest}\n\n"
+                f"DEBATE HISTORY:\n{history}\n\n"
+                + get_language_instruction()
+            ),
+        )
+        # Format to message list — invoke_structured_or_freetext expects
+        # PromptValue | str | list[BaseMessage], not ChatPromptTemplate.
+        formatted = prompt_template.format_messages(messages=state["messages"])
 
         investment_plan = invoke_structured_or_freetext(
             structured_llm,
             llm,
-            prompt,
+            formatted,
             render_research_plan,
             "Research Manager",
         )

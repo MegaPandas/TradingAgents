@@ -8,7 +8,7 @@ class AnalystNodeSpec:
     key: str
     agent_node: str
     clear_node: str
-    tool_node: str
+    tool_node: str | None  # None when the analyst has no ToolNode (e.g. Sentiment)
     report_key: str
 
 
@@ -30,10 +30,13 @@ ANALYST_NODE_SPECS: dict[str, AnalystNodeSpec] = {
         # user-facing label is "Sentiment Analyst" to match the rename
         # that landed in v0.2.5 (sentiment_analyst now ingests news +
         # StockTwits + Reddit, not just social media).
+        # tool_node=None: Sentiment pre-fetches data in-node and the LLM
+        # never binds tools, so no ToolNode is registered (was a dead
+        # empty node under key "social" before Fix 3).
         key="social",
         agent_node="Sentiment Analyst",
         clear_node="Msg Clear Sentiment",
-        tool_node="tools_social",
+        tool_node=None,
         report_key="sentiment_report",
     ),
     "news": AnalystNodeSpec(
@@ -49,6 +52,27 @@ ANALYST_NODE_SPECS: dict[str, AnalystNodeSpec] = {
         clear_node="Msg Clear Fundamentals",
         tool_node="tools_fundamentals",
         report_key="fundamentals_report",
+    ),
+    "macro_policy": AnalystNodeSpec(
+        key="macro_policy",
+        agent_node="Macro Policy Analyst",
+        clear_node="Msg Clear Macro Policy",
+        tool_node="tools_macro_policy",
+        report_key="macro_policy_report",
+    ),
+    "situation": AnalystNodeSpec(
+        key="situation",
+        agent_node="Situation Analyst",
+        clear_node="Msg Clear Situation",
+        tool_node="tools_situation",
+        report_key="situation_report",
+    ),
+    "business": AnalystNodeSpec(
+        key="business",
+        agent_node="Business Analyst",
+        clear_node="Msg Clear Business",
+        tool_node="tools_business",
+        report_key="business_report",
     ),
 }
 

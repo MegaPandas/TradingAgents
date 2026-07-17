@@ -30,14 +30,20 @@ T = TypeVar("T", bound=BaseModel)
 
 
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Any | None:
-    """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
+    """Return ``llm.with_structured_output(schema, include_raw=True)`` or None.
+
+    ``include_raw=True`` makes the runnable return ``{"parsed", "raw",
+    "parsing_error"}`` so that when a thinking/instruction model answers in
+    plain text instead of calling the structured-output tool (parsed=None),
+    we still recover the model's already-generated content from ``raw``
+    instead of paying for a second LLM call.
 
     Logs a warning when the binding fails so the user understands the agent
     will use free-text generation for every call instead of one-shot fallback.
     """
     try:
-        return llm.with_structured_output(schema)
-    except (NotImplementedError, AttributeError) as exc:
+        return llm.with_structured_output(schema, include_raw=True)
+    except (NotImplementedError, AttributeError, TypeError) as exc:
         logger.warning(
             "%s: provider does not support with_structured_output (%s); "
             "falling back to free-text generation",
@@ -59,21 +65,67 @@ def invoke_structured_or_freetext(
     invocations, a list of message dicts for chat models that take that
     shape). The same value is forwarded to the free-text path so the
     fallback sees the same input the structured call did.
+
+    Because ``bind_structured`` uses ``include_raw=True``, a structured miss
+    (parsed=None) still yields the model's raw message — we render that
+    instead of re-invoking, saving a duplicate LLM call. Only when the raw
+    message is also absent do we fall back to a fresh ``plain_llm.invoke``.
     """
     if structured_llm is not None:
         try:
-            result = structured_llm.invoke(prompt)
-            if result is None:
-                # A thinking model can answer in plain text instead of calling
-                # the tool, leaving the parser with nothing to return. Treat it
-                # as a structured miss and fall back, with a clear reason.
-                raise ValueError("structured output returned no parsed result")
-            return render(result)
+            envelope = structured_llm.invoke(prompt)
         except Exception as exc:
             logger.warning(
                 "%s: structured-output invocation failed (%s); retrying once as free text",
                 agent_name, exc,
             )
+            envelope = None
+
+        if isinstance(envelope, dict):
+            parsed = envelope.get("parsed")
+            if parsed is not None:
+                return render(parsed)
+            # parsed is None — model answered in plain text. Recover the
+            # raw message it already produced instead of re-invoking.
+            raw = envelope.get("raw")
+            raw_text = _extract_raw_content(raw)
+            if raw_text:
+                logger.info(
+                    "%s: structured parse returned no result; using model's "
+                    "raw text (no re-invocation)", agent_name,
+                )
+                return raw_text
+            logger.warning(
+                "%s: structured output returned no parsed result and no raw "
+                "content; retrying once as free text", agent_name,
+            )
+        elif envelope is not None:
+            # Some providers ignore include_raw and return the parsed object
+            # directly — handle that shape too.
+            return render(envelope)
 
     response = plain_llm.invoke(prompt)
     return response.content
+
+
+def _extract_raw_content(raw: Any) -> str:
+    """Pull the text content out of a raw message of unknown shape."""
+    if raw is None:
+        return ""
+    content = getattr(raw, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        # Multi-part message (tool-call / thinking blocks). Concatenate text parts.
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                t = block.get("text") or block.get("content")
+                if isinstance(t, str):
+                    parts.append(t)
+        joined = "\n".join(parts).strip()
+        if joined:
+            return joined
+    return ""

@@ -9,7 +9,13 @@ from stockstats import wrap
 from yfinance.exceptions import YFRateLimitError
 
 from .config import get_config
-from .symbol_utils import NoMarketDataError, normalize_symbol
+from .symbol_utils import (
+    NoMarketDataError,
+    cn_code6,
+    cn_sina_symbol,
+    is_cn_share,
+    normalize_symbol,
+)
 from .utils import safe_ticker_component
 
 logger = logging.getLogger(__name__)
@@ -126,9 +132,37 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
 
     Downloads 5 years of data up to today and caches per symbol. On
-    subsequent calls the cache is reused. Rows after curr_date are
-    filtered out so backtests never see future prices.
+    subsequent calls the cache is reused. Rows after curr_date are filtered
+    out so backtests never see future prices.
+
+    Tries multiple sources so a single vendor's gap can't crash the run
+    (load_ohlcv is called directly by the verified-snapshot path, not via the
+    vendor router): China A/B/Beijing shares try akshare first with yfinance as
+    backup; other symbols use yfinance (akshare has no US/global coverage).
+    Each loader raises NoMarketDataError on failure; this dispatcher falls
+    through to the next and re-raises only if every source fails.
     """
+    loaders = (
+        [_load_ohlcv_akshare, _load_ohlcv_yahoo]
+        if is_cn_share(symbol)
+        else [_load_ohlcv_yahoo]
+    )
+    last_err: NoMarketDataError | None = None
+    for loader in loaders:
+        try:
+            return loader(symbol, curr_date)
+        except (NoMarketDataError, Exception) as exc:
+            last_err = exc
+            logger.warning(
+                "OHLCV source %s failed for %s (%s); trying next source.",
+                getattr(loader, "__name__", "?"), symbol, exc,
+            )
+    raise last_err or NoMarketDataError(symbol, symbol, "all OHLCV sources failed")
+
+
+def _load_ohlcv_yahoo(symbol: str, curr_date: str) -> pd.DataFrame:
+    """Yahoo Finance OHLCV (5y, cached), filtered to curr_date + staleness guard."""
+
     # Resolve broker/forex symbols (XAUUSD+ -> GC=F) to Yahoo's convention,
     # then reject values that would escape the cache directory when
     # interpolated into the cache filename (e.g. ``../../tmp/x``).
@@ -189,6 +223,59 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     # feeding year-old prices into indicators (#1021).
     _assert_ohlcv_not_stale(data, curr_date, symbol, canonical)
 
+    return data
+
+
+def _load_ohlcv_akshare(symbol: str, curr_date: str, years: int = 5) -> pd.DataFrame:
+    """CN-share OHLCV via akshare (sina, 前复权), shaped like the yfinance path.
+
+    Same caching / curr_date look-ahead filter / staleness guard as the Yahoo
+    path so callers (verified snapshot, indicator warm-up) see no difference.
+    """
+    # Lazy import so stockstats_utils loads even if akshare is absent.
+    from .akshare_data import _no_proxy, _require_akshare
+
+    ak = _require_akshare()  # raises VendorNotConfiguredError if akshare missing
+    code = cn_code6(symbol) or symbol
+    sina = cn_sina_symbol(symbol) or f"sz{code}"
+    config = get_config()
+    curr_date_dt = pd.to_datetime(curr_date)
+
+    today = pd.Timestamp.today()
+    start_str = (today - pd.DateOffset(years=years)).strftime("%Y%m%d")
+    end_str = (today + pd.Timedelta(days=1)).strftime("%Y%m%d")
+
+    os.makedirs(config["data_cache_dir"], exist_ok=True)
+    data_file = os.path.join(
+        config["data_cache_dir"], f"{code}-akshare-qfq-{start_str}-{end_str}.csv"
+    )
+
+    data = None
+    if os.path.exists(data_file):
+        cached = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
+        if not cached.empty and "Close" in cached.columns:
+            data = cached
+
+    if data is None:
+        with _no_proxy():
+            df = ak.stock_zh_a_daily(
+                symbol=sina, start_date=start_str, end_date=end_str, adjust="qfq"
+            )
+        if df is None or df.empty:
+            raise NoMarketDataError(symbol, code, "akshare returned no rows")
+        data = pd.DataFrame({
+            "Date": pd.to_datetime(df["date"]),
+            "Open": pd.to_numeric(df["open"], errors="coerce"),
+            "High": pd.to_numeric(df["high"], errors="coerce"),
+            "Low": pd.to_numeric(df["low"], errors="coerce"),
+            "Close": pd.to_numeric(df["close"], errors="coerce"),
+            "Volume": pd.to_numeric(df["volume"], errors="coerce"),
+        })
+        data.to_csv(data_file, index=False, encoding="utf-8")
+
+    data = _clean_dataframe(data)
+    data = data[data["Date"] <= curr_date_dt]
+    _assert_ohlcv_not_stale(data, curr_date, symbol, code)
     return data
 
 

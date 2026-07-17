@@ -124,6 +124,9 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "geopolitical risk trade war sanctions",
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
+        # CN macro queries so get_global_news returns China-specific content.
+        "China PMI M2 GDP LPR inflation PBOC monetary policy 2026",
+        "China auto industry new energy vehicle NEV subsidy regulation 2026",
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
@@ -131,11 +134,20 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
-        "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
+        # akshare is the China A/B/Beijing-share vendor; yfinance serves
+        # US/global. Listing both (akshare first) routes CN symbols to akshare
+        # and falls back to yfinance for everything else: akshare raises
+        # NoMarketDataError for non-CN symbols, which the router treats as
+        # "try next vendor".
+        "core_stock_apis": "akshare,yfinance",       # Options: akshare, alpha_vantage, yfinance
+        "technical_indicators": "akshare,yfinance",  # Options: akshare, alpha_vantage, yfinance
+        "fundamental_data": "akshare,yfinance",      # Options: akshare, alpha_vantage, yfinance
+        "news_data": "akshare,yfinance",     # Options: akshare, alpha_vantage, yfinance
+        # akshare serves CN-specific macro aliases (lpr/shibor/m2/pmi/gdp/cn_cpi);
+        # any other indicator falls through to FRED (US/global, needs FRED_API_KEY).
+        # Consumed by the Macro & Policy analyst (P2 task 3) — opt-in via
+        # `selected_analysts=("...", "macro_policy")`.
+        "macro_data": "akshare,fred",        # Options: akshare, fred
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },
     # Tool-level configuration (takes precedence over category-level)

@@ -22,10 +22,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_insider_transactions,
     get_macro_indicators,
     get_news,
-    get_prediction_markets,
     get_stock_data,
     get_verified_market_snapshot,
     resolve_instrument_identity,
+    web_search,
 )
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
@@ -185,6 +185,11 @@ class TradingAgentsGraph:
 
         return kwargs
 
+    @staticmethod
+    def _always_clear_macro_policy(_state):
+        """Macro & Policy analyst has no tool-calling; always advance to clear."""
+        return "Msg Clear Macro Policy"
+
     def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
@@ -200,12 +205,10 @@ class TradingAgentsGraph:
                     get_verified_market_snapshot,
                 ]
             ),
-            "social": ToolNode(
-                [
-                    # News tools for social media analysis
-                    get_news,
-                ]
-            ),
+            # NOTE: Sentiment Analyst has no ToolNode — it pre-fetches data
+            # in-node (guba/StockTwits/Reddit/news) and embeds the result in
+            # the prompt, so the LLM never sees a tool list.  No node
+            # registered under "social".
             "news": ToolNode(
                 [
                     # News and insider information
@@ -213,7 +216,10 @@ class TradingAgentsGraph:
                     get_global_news,
                     get_insider_transactions,
                     get_macro_indicators,
-                    get_prediction_markets,
+                    # get_prediction_markets removed — Polymarket is unreachable
+                    # from China and excluded by prompt for non-CN runs; carrying
+                    # it in the ToolNode confuses the routing code.
+                    web_search,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -223,8 +229,19 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                    # get_fair_value removed — the deterministic 5-model FV is
+                    # pre-computed by propagation.py and stored on
+                    # state["fair_value_block"].  Removing the tool eliminates
+                    # the double-source that previously gave Fundamentals and
+                    # PM divergent numbers.
                 ]
             ),
+            "macro_policy": ToolNode([web_search, get_macro_indicators]),
+            "situation": ToolNode([web_search]),
+            # Situation previously bound get_news but cited zero results
+            # (duplicated News analyst's 7-day window).  web_search handles
+            # historical catalysts outside that window.
+            "business": ToolNode([web_search]),
         }
 
     def _resolve_benchmark(self, ticker: str) -> str:
@@ -501,7 +518,7 @@ class TradingAgentsGraph:
                     "judge_decision"
                 ],
             },
-            "trader_investment_decision": final_state["trader_investment_plan"],
+            "trader_investment_decision": final_state.get("trader_investment_plan", ""),
             "risk_debate_state": {
                 "aggressive_history": final_state["risk_debate_state"]["aggressive_history"],
                 "conservative_history": final_state["risk_debate_state"]["conservative_history"],

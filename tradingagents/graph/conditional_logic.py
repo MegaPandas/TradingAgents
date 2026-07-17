@@ -49,6 +49,30 @@ class ConditionalLogic:
             return "tools_fundamentals"
         return "Msg Clear Fundamentals"
 
+    def should_continue_macro_policy(self, state: AgentState):
+        """Determine if macro & policy analysis should continue (tools or clear)."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_macro_policy"
+        return "Msg Clear Macro Policy"
+
+    def should_continue_situation(self, state: AgentState):
+        """Determine if situation analysis should continue (tools or clear)."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_situation"
+        return "Msg Clear Situation"
+
+    def should_continue_business(self, state: AgentState):
+        """Determine if business analysis should continue (tools or clear)."""
+        messages = state["messages"]
+        last_message = messages[-1]
+        if last_message.tool_calls:
+            return "tools_business"
+        return "Msg Clear Business"
+
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""
 
@@ -61,13 +85,11 @@ class ConditionalLogic:
         return "Bull Researcher"
 
     def should_continue_risk_analysis(self, state: AgentState) -> str:
-        """Determine if risk analysis should continue."""
-        if (
-            state["risk_debate_state"]["count"] >= 3 * self.max_risk_discuss_rounds
-        ):  # 3 rounds of back-and-forth between 3 agents
-            return "Portfolio Manager"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Aggressive"):
-            return "Conservative Analyst"
-        if state["risk_debate_state"]["latest_speaker"].startswith("Conservative"):
-            return "Neutral Analyst"
-        return "Aggressive Analyst"
+        """Determine if risk analysis should continue.
+
+        Only Neutral Analyst calls this conditional now.  Aggressive and
+        Conservative each get exactly ONE turn (direct edge to Neutral).
+        Neutral synthesises and always routes to Portfolio Manager.
+        """
+        _ = state  # reserved for future multi-round routing
+        return "Portfolio Manager"

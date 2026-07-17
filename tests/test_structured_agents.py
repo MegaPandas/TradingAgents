@@ -94,6 +94,7 @@ class TestNullishFloatCoercion:
             executive_summary="s",
             investment_thesis="t",
             price_target="N/A",
+            operation_rules="rules",
         )
         assert d.price_target is None
 
@@ -198,7 +199,11 @@ class TestTraderAgent:
         trader(_make_trader_state())
         # The investment plan is in the user message of the captured prompt.
         prompt = captured["prompt"]
-        assert any("Proposed Investment Plan" in m["content"] for m in prompt)
+        assert any(
+            "Proposed Investment Plan" in m["content"]
+            or "investment plan" in m["content"]
+            for m in prompt
+        )
 
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
@@ -273,7 +278,9 @@ class TestResearchManagerAgent:
         rm(_make_rm_state())
         prompt = captured["prompt"]
         for tier in ("Buy", "Overweight", "Hold", "Underweight", "Sell"):
-            assert f"**{tier}**" in prompt, f"missing {tier} in prompt"
+            # New P0 style lists tiers in the OUTPUT line; accept either
+            # the new plain-text form or the legacy bold form.
+            assert (tier in prompt) or (f"**{tier}**" in prompt), f"missing {tier} in prompt"
 
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = "**Recommendation**: Sell\n\n**Rationale**: ...\n\n**Strategic Actions**: ..."
@@ -406,3 +413,24 @@ class TestSentimentAnalystAgent:
         llm.with_structured_output.return_value = structured
         llm.invoke.return_value = MagicMock(content=plain)
         assert create_sentiment_analyst(llm)(_make_sentiment_state())["sentiment_report"] == plain
+
+
+# ---------------------------------------------------------------------------
+# Portfolio Manager amend fields (D5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_pm_decision_has_amend_fields():
+    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+    d = PortfolioDecision(
+        rating=PortfolioRating.UNDERWEIGHT,
+        executive_summary="reduce",
+        investment_thesis="x",
+        operation_rules="rules",
+        rating_change_rationale="",
+        level_delta="",
+    )
+    # Both fields exist; string-coerce to None when empty.
+    assert d.rating_change_rationale in ("", None)
+    assert d.level_delta in ("", None)

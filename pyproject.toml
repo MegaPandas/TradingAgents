@@ -31,6 +31,10 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=1.4.1",
+    # China A/B/Beijing-share data (sina/emweb backends). Optional at runtime
+    # via defensive import, but listed as a dep so the akshare vendor works
+    # out of the box for CN symbols.
+    "akshare>=1.17.86",
 ]
 
 [project.optional-dependencies]

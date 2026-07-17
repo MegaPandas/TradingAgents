@@ -48,7 +48,7 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.reporting import write_report_tree
+from tradingagents.reporting import _render_debater_history, write_report_tree
 
 console = Console()
 
@@ -75,6 +75,7 @@ class MessageBuffer:
         "social": "Sentiment Analyst",
         "news": "News Analyst",
         "fundamentals": "Fundamentals Analyst",
+        "macro_policy": "Macro & Policy Analyst",
     }
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
@@ -85,6 +86,9 @@ class MessageBuffer:
         "sentiment_report": ("social", "Sentiment Analyst"),
         "news_report": ("news", "News Analyst"),
         "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        "macro_policy_report": ("macro_policy", "Macro & Policy Analyst"),
+        "situation_report": ("situation", "Situation Analyst"),
+        "business_report": ("business", "Business Analyst"),
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -193,6 +197,9 @@ class MessageBuffer:
                 "sentiment_report": "Social Sentiment",
                 "news_report": "News Analysis",
                 "fundamentals_report": "Fundamentals Analysis",
+                "macro_policy_report": "Macro & Policy Analysis",
+                "situation_report": "Current Situation Analysis",
+                "business_report": "Business Segment Analysis",
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
@@ -767,6 +774,12 @@ def display_complete_report(final_state):
         analysts.append(("News Analyst", final_state["news_report"]))
     if final_state.get("fundamentals_report"):
         analysts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    if final_state.get("macro_policy_report"):
+        analysts.append(("Macro & Policy Analyst", final_state["macro_policy_report"]))
+    if final_state.get("situation_report"):
+        analysts.append(("Situation Analyst", final_state["situation_report"]))
+    if final_state.get("business_report"):
+        analysts.append(("Business Analyst", final_state["business_report"]))
     if analysts:
         console.print(Panel("[bold]I. Analyst Team Reports[/bold]", border_style="cyan"))
         for title, content in analysts:
@@ -821,18 +834,24 @@ def update_research_team_status(status):
 
 
 # Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+ANALYST_ORDER = ["market", "social", "news", "fundamentals", "macro_policy", "business", "situation"]
 ANALYST_AGENT_NAMES = {
     "market": "Market Analyst",
     "social": "Sentiment Analyst",
     "news": "News Analyst",
     "fundamentals": "Fundamentals Analyst",
+    "macro_policy": "Macro & Policy Analyst",
+    "business": "Business Analyst",
+    "situation": "Situation Analyst",
 }
 ANALYST_REPORT_MAP = {
     "market": "market_report",
     "social": "sentiment_report",
     "news": "news_report",
     "fundamentals": "fundamentals_report",
+    "macro_policy": "macro_policy_report",
+    "business": "business_report",
+    "situation": "situation_report",
 }
 
 
@@ -1189,19 +1208,22 @@ def run_analysis(checkpoint: bool | None = None):
                     if message_buffer.agent_status.get("Aggressive Analyst") != "completed":
                         message_buffer.update_agent_status("Aggressive Analyst", "in_progress")
                     message_buffer.update_report_section(
-                        "final_trade_decision", f"### Aggressive Analyst Analysis\n{agg_hist}"
+                        "final_trade_decision",
+                        f"### Aggressive Analyst Analysis\n{_render_debater_history(agg_hist, 'Aggressive Analyst')}",
                     )
                 if con_hist:
                     if message_buffer.agent_status.get("Conservative Analyst") != "completed":
                         message_buffer.update_agent_status("Conservative Analyst", "in_progress")
                     message_buffer.update_report_section(
-                        "final_trade_decision", f"### Conservative Analyst Analysis\n{con_hist}"
+                        "final_trade_decision",
+                        f"### Conservative Analyst Analysis\n{_render_debater_history(con_hist, 'Conservative Analyst')}",
                     )
                 if neu_hist:
                     if message_buffer.agent_status.get("Neutral Analyst") != "completed":
                         message_buffer.update_agent_status("Neutral Analyst", "in_progress")
                     message_buffer.update_report_section(
-                        "final_trade_decision", f"### Neutral Analyst Analysis\n{neu_hist}"
+                        "final_trade_decision",
+                        f"### Neutral Analyst Analysis\n{_render_debater_history(neu_hist, 'Neutral Analyst')}",
                     )
                 if judge and message_buffer.agent_status.get("Portfolio Manager") != "completed":
                     message_buffer.update_agent_status("Portfolio Manager", "in_progress")

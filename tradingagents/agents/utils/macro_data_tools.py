@@ -11,7 +11,9 @@ def get_macro_indicators(
         str,
         "Macro indicator: a friendly alias such as 'cpi', 'core_pce', "
         "'unemployment', 'fed_funds_rate', '10y_treasury', 'yield_curve', "
-        "'real_gdp', 'vix', or a raw FRED series ID such as 'CPIAUCSL'.",
+        "'real_gdp', 'vix', or a raw FRED series ID such as 'CPIAUCSL'. "
+        "For China analysis use the CN aliases 'lpr', 'shibor', 'm2', "
+        "'pmi', 'gdp', or 'cn_cpi' (served by the akshare vendor).",
     ],
     curr_date: Annotated[str, "Current date in yyyy-mm-dd format; the end of the window"],
     look_back_days: Annotated[

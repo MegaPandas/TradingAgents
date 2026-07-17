@@ -21,7 +21,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+import re
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # LLMs sometimes write a placeholder string ("None", "N/A", ...) into an optional
 # numeric field instead of omitting it. Coerce those to None so the structured
@@ -31,7 +33,24 @@ _NULLISH_FLOAT = {"", "none", "n/a", "na", "null", "nil", "-", "tbd", "unknown"}
 
 
 def _coerce_optional_float(value):
-    if isinstance(value, str) and value.strip().lower() in _NULLISH_FLOAT:
+    """Coerce LLM price strings into float | None.
+
+    Models often emit decorated prices like ``"85.08 CNY（25× PE on FY EPS）"``
+    even though the field type is ``float``.  Pydantic rejects those.  This
+    validator, run ``mode="before"``, extracts the leading numeric token so
+    the structured-output call succeeds instead of falling back to free text.
+    """
+    if isinstance(value, str):
+        s = value.strip()
+        if s.lower() in _NULLISH_FLOAT:
+            return None
+        # Extract the first signed decimal number anywhere in the string.
+        m = re.search(r"[-+]?\d+(?:\.\d+)?", s.replace(",", ""))
+        if m:
+            try:
+                return float(m.group(0))
+            except ValueError:
+                return None
         return None
     return value
 
@@ -215,17 +234,98 @@ class PortfolioDecision(BaseModel):
     )
     price_target: float | None = Field(
         default=None,
-        description="Optional target price in the instrument's quote currency.",
+        description=(
+            "Target price in the instrument's quote currency. Provide whenever a "
+            "position is intended, bullish or bearish (for a bearish call this is "
+            "the downside target)."
+        ),
+    )
+    entry_price: float | None = Field(
+        default=None,
+        description=(
+            "Actionable entry price in the quote currency. For a bullish rating "
+            "the buy level. For A-shares this is ALWAYS a buy-to-enter price, "
+            "even under a Sell/Underweight rating (the bear case becomes 'wait "
+            "for a pullback to this level'). For shortable markets this can also "
+            "be the short entry. Provide whenever a position is intended."
+        ),
+    )
+    invalidation: float | None = Field(
+        default=None,
+        description=(
+            "Price at which the trade thesis is invalidated (in quote currency). "
+            "Provide whenever a position is intended, for either direction."
+        ),
+    )
+    position_sizing: str | None = Field(
+        default=None,
+        description="Position size guidance, e.g. '3-5% of portfolio'.",
+    )
+    operation_rules: str = Field(
+        description=(
+            "Complete, always-present operation plan. Regardless of whether the "
+            "rating is bullish or bearish, spell out concrete if-then rules: the "
+            "entry trigger, levels at which to add or trim, the exit / "
+            "invalidation condition, and the condition that would re-open the "
+            "position. Ground every price level in the analyst reports — do not "
+            "invent round numbers."
+        ),
+    )
+    rating_change_rationale: str | None = Field(
+        default=None,
+        description=(
+            "If the final rating differs from the Research Manager's or the Trader's, "
+            "state why in one sentence."
+        ),
+    )
+    level_delta: str | None = Field(
+        default=None,
+        description="Summarize adjustments vs the Research Manager's plan (if any).",
+    )
+    fair_value: float | None = Field(
+        default=None,
+        description=(
+            "Your probability-weighted fair value. Must be computed from "
+            "the debate scenarios (weighted average), NOT copied from one "
+            "side. Show the weighting formula."
+        ),
     )
     time_horizon: str | None = Field(
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "entry_price", "invalidation", "fair_value", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
+
+    @model_validator(mode="after")
+    def _check_rating_target_consistency(self):
+        """Reject direction-mismatched rating + price_target.
+
+        Buy/Overweight → target should be above entry.
+        Underweight/Sell → target should be at or below current price context.
+        Hold → target ≈ current price.
+        This catches the 'Underweight + target 126' contradiction.
+        """
+        if self.price_target is not None and self.entry_price is not None:
+            if self.rating in (PortfolioRating.BUY, PortfolioRating.OVERWEIGHT):
+                if self.price_target < self.entry_price:
+                    raise ValueError(
+                        f"INTERNAL CONSISTENCY: {self.rating.value} rating but "
+                        f"price_target ({self.price_target}) < entry_price "
+                        f"({self.entry_price}). Bullish rating requires target > entry."
+                    )
+            if self.rating == PortfolioRating.UNDERWEIGHT:
+                if self.price_target > self.entry_price * 1.3:
+                    raise ValueError(
+                        f"INTERNAL CONSISTENCY: Underweight rating but price_target "
+                        f"({self.price_target}) >> entry_price ({self.entry_price}). "
+                        f"Underweight means fair value is BELOW current — target "
+                        f"should not be a bull-case number."
+                    )
+        return self
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -243,8 +343,22 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
     ]
+    plan = []
     if decision.price_target is not None:
-        parts.extend(["", f"**Price Target**: {decision.price_target}"])
+        plan.append(f"- Target price: {decision.price_target}")
+    if decision.entry_price is not None:
+        plan.append(f"- Entry: {decision.entry_price}")
+    if decision.invalidation is not None:
+        plan.append(f"- Invalidation: {decision.invalidation}")
+    if decision.position_sizing:
+        plan.append(f"- Position sizing: {decision.position_sizing}")
+    if plan:
+        parts.extend(["", "**Trade Plan**", "\n".join(plan)])
+    parts.extend(["", "**Operation Rules**", decision.operation_rules])
+    if decision.rating_change_rationale:
+        parts.extend(["", "**Rating Change Rationale**", decision.rating_change_rationale])
+    if decision.level_delta:
+        parts.extend(["", "**Level Delta vs Trader**", decision.level_delta])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
     return "\n".join(parts)
@@ -330,8 +444,27 @@ def render_sentiment_report(report: SentimentReport) -> str:
 
     The structured header (band + score + confidence) is prepended to the
     narrative so the saved report is both human-readable and machine-parseable
-    without regex.
+    without regex. Labels follow the configured output language so a
+    Chinese-mode run does not produce an English header mixed into an
+    otherwise-Chinese report (the FORMAT RULE now anchors every analyst to
+    Chinese from its first character, and this header follows suit).
     """
+    from tradingagents.dataflows.config import get_config
+    lang = get_config().get("output_language", "English")
+    cn = lang.strip().lower() != "english"
+    if cn:
+        band_map = {
+            "Bullish": "看多", "Mildly Bullish": "轻度看多",
+            "Neutral": "中性", "Mixed": "分歧",
+            "Mildly Bearish": "轻度看空", "Bearish": "看空",
+        }
+        return "\n".join([
+            f"**整体情绪:** **{band_map.get(report.overall_band.value, report.overall_band.value)}** "
+            f"(评分: {report.overall_score:.1f}/10)",
+            f"**置信度:** {report.confidence.capitalize()}",
+            "",
+            report.narrative,
+        ])
     return "\n".join([
         f"**Overall Sentiment:** **{report.overall_band.value}** "
         f"(Score: {report.overall_score:.1f}/10)",

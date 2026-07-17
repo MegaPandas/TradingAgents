@@ -73,6 +73,16 @@ class BuildInstrumentContextTests(unittest.TestCase):
         self.assertIn("exchange suffix", context)
         self.assertNotIn("Resolved identity", context)
 
+    def test_china_share_gets_cny_tag(self):
+        for ticker in ("002594.SZ", "600519.SS", "300750"):
+            context = build_instrument_context(ticker)
+            self.assertIn("CNY", context, ticker)
+            self.assertIn("China A/B-share", context, ticker)
+
+    def test_non_cn_share_has_no_cny_tag(self):
+        for ticker in ("AAPL", "7203.T", "TSM"):
+            self.assertNotIn("China A/B-share", build_instrument_context(ticker))
+
     def test_injects_resolved_identity(self):
         context = build_instrument_context(
             "TOTDY", "stock",
