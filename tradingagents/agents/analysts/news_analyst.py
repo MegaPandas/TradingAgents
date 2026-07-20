@@ -1,6 +1,7 @@
 from tradingagents.agents.utils.agent_utils import (
     _PIPELINE_PREAMBLE,
     chat_prompt_messages,
+    safe_llm_invoke,
     get_global_news,
     get_insider_transactions,
     get_instrument_context_from_state,
@@ -104,7 +105,7 @@ def create_news_analyst(llm):
         )
 
         chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = safe_llm_invoke(chain, state["messages"], "News Analyst")
 
         report = ""
 

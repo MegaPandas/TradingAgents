@@ -1,75 +1,83 @@
+"""Bear Researcher — simultaneous-debate advocate for the short/avoid case.
+
+Mirror of bull_researcher with sides swapped. See graph/debate.py for topology.
+"""
+
 from tradingagents.agents.utils.agent_utils import (
     chat_prompt_messages,
+    collect_analyst_reports,
     format_fair_value_block,
     get_instrument_context_from_state,
     get_language_instruction,
+    safe_llm_invoke,
 )
+from tradingagents.agents.utils.debate_helpers import next_round_for_side, render_transcript
+
+_SIDE = "bear"
+_OPPONENT = "bull"
+_SIDES = ("bull", "bear")
+
 
 _BEAR_SYSTEM = """ROLE
-You are the Bear Researcher. Build the strongest evidence-based short/avoid case from the analyst reports, and answer the bull case on its own terms.
+You are the Bear Researcher — a partisan advocate for the SHORT/AVOID case. Your opponent is the Bull Researcher.
 
-SCOPE
-1. State the core bear thesis in one sentence.
-2. Give 3–5 supporting evidence points, each citing which analyst report and which number.
-3. Address the bull's strongest points directly, with data — not assertion.
-4. Acknowledge the genuine upside (credibility requires it).
+ABSOLUTE OUTPUT CONTRACT (every response must obey these):
+1. Your output ALWAYS begins with the literal line `**Round {my_round}**` on its own line. Non-negotiable; it identifies which round the supervisor records.
+2. Output ONLY the body for THIS round. No summary, no verdict, no probability blend, no stop-loss — those belong to the Research Manager, NOT you.
+3. Round 1 — OPENING. Write:
+   - One sentence: core bear thesis.
+   - 3-5 cited evidence points (name the source analyst + the number).
+   - A short "Acknowledged upside" line (1-2 items).
+4. Round 2+ — DELTA-ONLY. Opponent's turn is in the transcript. You MUST:
+   - Pick a specific claim from `Re: R{my_round-1}-{opp}` and rebut it, OR
+   - Introduce new evidence the opponent has not yet seen.
+   - Do NOT restate your R1. No verdict, no probability blend.
 
 HARD CONSTRAINTS
-- Cite the source analyst report for every claim. Introduce no data not present in the analyst reports or tool outputs.
+- Cite the source analyst + number for every claim.
 - Disagree on interpretation, never on facts.
-- Begin your reply with the literal line `**Round N**` (replace N with this round's number, derivable from the history length above).
-- Do NOT restate points already in the debate history; write ONLY (a) new evidence, (b) explicit rebuttals to specific opposing arguments (cite them), or (c) updated numbers. Restating your earlier argument is a wasted turn.
-- If the opposing side has not yet spoken this round, focus on (a) and (c).
-
-OUTPUT
-- Thesis (one sentence)
-- Evidence (3–5 cited points)
-- Response to bull (point-by-point, cited)
-- Acknowledged upside"""
+- If opponent has no turn yet (transcript shows `<no turn>`), treat as opening and do NOT fabricate claims."""
 
 
 def create_bear_researcher(llm):
     def bear_node(state) -> dict:
-        investment_debate_state = state["investment_debate_state"]
-        history = investment_debate_state.get("history", "")
-        bear_history = investment_debate_state.get("bear_history", "")
-
-        current_response = investment_debate_state.get("current_response", "")
-        report_digest = state.get("report_digest") or (
-            state.get("market_report", "") + state.get("sentiment_report", "") +
-            state.get("news_report", "") + state.get("fundamentals_report", "") +
-            state.get("macro_policy_report", "") + state.get("business_report", "") +
-            state.get("situation_report", "")
-        )
+        turns = state.get("research_debate_turns", [])
+        my_round = next_round_for_side(turns, _SIDE)
+        transcript = render_transcript(turns, _SIDES)
+        report_digest = state.get("report_digest") or collect_analyst_reports(state)
         instrument_context = get_instrument_context_from_state(state)
         fv_context = format_fair_value_block(state)
 
+        round_directive = (
+            "Round 1 (OPENING). No opponent turn exists yet. Write the opening position following the OUTPUT CONTRACT; "
+            "no verdict, no probability blend, no stop-loss."
+            if my_round == 1
+            else
+            f"Round {my_round} (DELTA-ONLY). Opponent's turn is in the transcript. "
+            f"You MUST (a) rebut a specific claim from `Re: R{my_round-1}-{_OPPONENT}`, "
+            f"or (b) introduce new evidence. "
+            f"No restatement of your R1. No verdict. No probability blend. No stop-loss."
+        )
+
         data_block = (
-            fv_context +
-            f"\n\nANALYST REPORT DIGEST:\n{report_digest}\n\n"
-            f"DEBATE HISTORY:\n{history}\n\n"
-            f"LAST BULL ARGUMENT:\n{current_response}\n\n"
+            f"{fv_context}\n\n"
+            f"ANALYST REPORT DIGEST:\n{report_digest}\n\n"
+            f"DEBATE TRANSCRIPT (canonical; opponent = {_OPPONENT}):\n{transcript}\n\n"
+            f"YOUR ROUND: {my_round}\n"
+            f"INSTRUCTION FOR THIS ROUND: {round_directive}\n\n"
             + get_language_instruction()
         )
 
+        system_message = _BEAR_SYSTEM.replace("{my_round}", str(my_round))
+
         prompt_template = chat_prompt_messages(
-            _BEAR_SYSTEM, tools=[],
+            system_message, tools=[],
             current_date="", instrument_context=instrument_context,
             data_block=data_block,
         )
         formatted = prompt_template.format_messages(messages=state["messages"])
-        response = llm.invoke(formatted)
+        response = safe_llm_invoke(llm, formatted, "Bear Researcher")
 
-        argument = f"Bear Analyst: {response.content}"
-
-        new_investment_debate_state = {
-            "history": history + "\n" + argument,
-            "bear_history": bear_history + "\n" + argument,
-            "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": argument,
-            "count": investment_debate_state["count"] + 1,
-        }
-
-        return {"investment_debate_state": new_investment_debate_state}
+        return {"research_debate_turns": [{"round": my_round, "side": _SIDE, "delta": response.content}]}
 
     return bear_node

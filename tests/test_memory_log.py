@@ -64,6 +64,7 @@ def _make_pm_state(past_context=""):
     return {
         "company_of_interest": "NVDA",
         "past_context": past_context,
+        "messages": [],
         "risk_debate_state": {
             "history": "Risk debate history.",
             "aggressive_history": "",
@@ -80,7 +81,6 @@ def _make_pm_state(past_context=""):
         "news_report": "News report.",
         "fundamentals_report": "Fundamentals report.",
         "investment_plan": "Research plan.",
-        "trader_investment_plan": "Trader plan.",
     }
 
 
@@ -694,8 +694,10 @@ class TestPortfolioManagerInjection:
         pm_node = create_portfolio_manager(llm)
         state = _make_pm_state(past_context="[2026-01-05 | NVDA | Buy | +5.0% | +2.0% | 5d]\nGreat call.")
         pm_node(state)
-        assert "Lessons from prior decisions and outcomes" in captured["prompt"]
-        assert "Great call." in captured["prompt"]
+        # captured["prompt"] is a list of BaseMessage; stringify before substring.
+        prompt_text = "\n".join(str(m) for m in captured["prompt"])
+        assert "Lessons from prior decisions and outcomes" in prompt_text
+        assert "Great call." in prompt_text
 
     def test_pm_no_past_context_no_section(self):
         """PM prompt omits the lessons section entirely when past_context is empty."""
@@ -847,7 +849,6 @@ class TestLegacyRemoval:
                 "current_response": "", "judge_decision": "",
             },
             "investment_plan": "",
-            "trader_investment_plan": "",
             "risk_debate_state": {
                 "aggressive_history": "", "conservative_history": "",
                 "neutral_history": "", "history": "", "judge_decision": "",

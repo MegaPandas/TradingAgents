@@ -13,9 +13,17 @@ def _state():
     return {
         "market_report": "MKT",
         "news_report": "NEWS",
-        "investment_debate_state": {"judge_decision": "RM PLAN"},
-        "trader_investment_plan": "TRADE",
-        "risk_debate_state": {"judge_decision": "PM DECISION"},
+        "research_debate_turns": [
+            {"round": 1, "side": "bull", "delta": "BULL1"},
+            {"round": 1, "side": "bear", "delta": "BEAR1"},
+        ],
+        "investment_plan": "RM PLAN",
+        "risk_debate_turns": [
+            {"round": 1, "side": "aggressive", "delta": "AGG1"},
+            {"round": 1, "side": "conservative", "delta": "CON1"},
+        ],
+        "risk_synthesis": "NEUTRAL SYNTH",
+        "final_trade_decision": "PM DECISION",
     }
 
 
@@ -26,7 +34,10 @@ def test_write_report_tree_creates_files(tmp_path):
     assert (tmp_path / "1_analysts" / "market.md").read_text() == "MKT"
     assert (tmp_path / "1_analysts" / "news.md").read_text() == "NEWS"
     assert (tmp_path / "2_research" / "manager.md").read_text() == "RM PLAN"
-    assert (tmp_path / "3_trading" / "trader.md").read_text() == "TRADE"
+    assert "BULL1" in (tmp_path / "2_research" / "bull.md").read_text()
+    assert "BEAR1" in (tmp_path / "2_research" / "bear.md").read_text()
+    assert (tmp_path / "4_risk" / "neutral.md").read_text() == "NEUTRAL SYNTH"
+    assert "AGG1" in (tmp_path / "4_risk" / "aggressive.md").read_text()
     assert (tmp_path / "5_portfolio" / "decision.md").read_text() == "PM DECISION"
     complete = out.read_text()
     assert "Trading Analysis Report: AAPL" in complete

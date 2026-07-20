@@ -12,6 +12,7 @@ from tradingagents.agents.utils.agent_utils import (
     chat_prompt_messages,
     get_instrument_context_from_state,
     get_language_instruction,
+    safe_llm_invoke,
     web_search,
 )
 
@@ -80,7 +81,7 @@ def create_business_analyst(llm):
         )
 
         chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = safe_llm_invoke(chain, state["messages"], "Business Analyst")
 
         report = ""
         if len(result.tool_calls) == 0:

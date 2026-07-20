@@ -59,9 +59,11 @@ def test_cn_share_drops_prediction_markets_and_keeps_macro():
 
 
 @pytest.mark.unit
-def test_non_cn_keeps_prediction_markets():
+def test_non_cn_keeps_macro_indicators():
+    # Polymarket (get_prediction_markets) was removed globally (unreachable from
+    # China); both CN and non-CN news analysts drop it. Macro indicators stay.
     llm = _FakeLLM()
     node = na.create_news_analyst(llm)
     node(_state("AAPL"))
     assert "get_macro_indicators" in llm.bound_tool_names
-    assert "get_prediction_markets" in llm.bound_tool_names
+    assert "get_prediction_markets" not in llm.bound_tool_names

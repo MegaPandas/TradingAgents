@@ -13,6 +13,7 @@ import pandas as pd
 from tradingagents.agents.utils.agent_utils import (
     _PIPELINE_PREAMBLE,
     chat_prompt_messages,
+    safe_llm_invoke,
     get_instrument_context_from_state,
     get_language_instruction,
     get_macro_indicators,
@@ -218,7 +219,7 @@ def create_macro_policy_analyst(llm):
         )
 
         chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = safe_llm_invoke(chain, state["messages"], "Macro & Policy Analyst")
 
         # When the LLM made tool calls, the graph will route through the
         # ToolNode and back; the report is only ready on the clear pass.

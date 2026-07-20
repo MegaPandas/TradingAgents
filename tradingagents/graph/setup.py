@@ -32,22 +32,7 @@ from tradingagents.agents.utils.agent_states import AgentState
 
 from .analyst_execution import ANALYST_NODE_SPECS, AnalystNodeSpec, build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
-
-# Every target a shared conditional router can return. Each edge driven by the
-# router maps all of them, so a fall-through return (e.g. under prompt/i18n/
-# refactor drift in the speaker labels) can never hit a missing path_map entry
-# and crash LangGraph mid-run (#1088).
-DEBATE_PATH_MAP = {
-    "Bull Researcher": "Bull Researcher",
-    "Bear Researcher": "Bear Researcher",
-    "Research Manager": "Research Manager",
-}
-RISK_ANALYSIS_PATH_MAP = {
-    "Aggressive Analyst": "Aggressive Analyst",
-    "Conservative Analyst": "Conservative Analyst",
-    "Neutral Analyst": "Neutral Analyst",
-    "Portfolio Manager": "Portfolio Manager",
-}
+from .debate import build_debate
 
 
 class GraphSetup:
@@ -79,9 +64,9 @@ class GraphSetup:
                 - "fundamentals": Fundamentals analyst
                 - "macro_policy": Macro & Policy analyst (P2 — opt-in)
         """
-        # The Macro & Policy analyst has no tool-calling (data is pre-fetched
-        # in the node), so its empty ToolNode and one-line conditional live in
-        # the registries owned by `trading_graph.GraphSetup.__init__` callers.
+        # Build the analyst chain from the selection. Each spec carries its
+        # own agent factory, tool node (or None for the in-node Sentiment
+        # analyst), and report key.
         plan = build_analyst_execution_plan(selected_analysts)
 
         analyst_factories = {
@@ -172,31 +157,32 @@ class GraphSetup:
             else:
                 workflow.add_edge(current_clear, "Report Digest")
 
-        workflow.add_edge("Report Digest", "Bull Researcher")
-
-        # Both research-debate edges share the complete DEBATE_PATH_MAP (#1088).
-        for debate_node in ("Bull Researcher", "Bear Researcher"):
-            workflow.add_conditional_edges(
-                debate_node,
-                self.conditional_logic.should_continue_debate,
-                DEBATE_PATH_MAP,
-            )
-        workflow.add_edge("Research Manager", "Aggressive Analyst")
-        workflow.add_edge("Research Manager", "Conservative Analyst")
-        # Aggressive and Conservative run in parallel after Research Manager.
-        # Each writes to a SEPARATE state key (aggressive_risk_argument /
-        # conservative_risk_argument) — no reducer collision on the nested
-        # TypedDict.  Each gets ONE turn, then routes directly to Neutral.
-        workflow.add_edge("Aggressive Analyst", "Neutral Analyst")
-        workflow.add_edge("Conservative Analyst", "Neutral Analyst")
-        # Neutral synthesises both arguments into risk_debate_state, then
-        # routes to Portfolio Manager.
-        workflow.add_conditional_edges(
-            "Neutral Analyst",
-            self.conditional_logic.should_continue_risk_analysis,
-            RISK_ANALYSIS_PATH_MAP,
+        # --- Research debate: simultaneous rounds, Bull vs Bear ---
+        # Order-neutral: both advocates fan out per round (operator.add reducer
+        # on research_debate_turns), collector fans in, round-count conditional
+        # routes to the synthesizer (Research Manager) after max_rounds.
+        build_debate(
+            workflow,
+            entry_from="Report Digest",
+            advocates={"Bull Researcher": "bull", "Bear Researcher": "bear"},
+            synthesizer="Research Manager",
+            turns_key="research_debate_turns",
+            max_rounds=self.conditional_logic.max_debate_rounds,
         )
 
+        # --- Risk debate: simultaneous rounds, Aggressive vs Conservative ---
+        # Synthesizer = Neutral (pure synthesizer; offloads the PM, which
+        # consumes Neutral's risk_synthesis instead of raw advocate turns).
+        build_debate(
+            workflow,
+            entry_from="Research Manager",
+            advocates={"Aggressive Analyst": "aggressive", "Conservative Analyst": "conservative"},
+            synthesizer="Neutral Analyst",
+            turns_key="risk_debate_turns",
+            max_rounds=self.conditional_logic.max_risk_discuss_rounds,
+        )
+
+        workflow.add_edge("Neutral Analyst", "Portfolio Manager")
         workflow.add_edge("Portfolio Manager", END)
 
         return workflow

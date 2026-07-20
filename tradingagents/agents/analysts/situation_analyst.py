@@ -11,6 +11,7 @@ from __future__ import annotations
 from tradingagents.agents.utils.agent_utils import (
     _PIPELINE_PREAMBLE,
     chat_prompt_messages,
+    safe_llm_invoke,
     get_instrument_context_from_state,
     get_language_instruction,
     get_news,
@@ -86,7 +87,7 @@ def create_situation_analyst(llm):
         )
 
         chain = prompt | llm.bind_tools(tools)
-        result = chain.invoke(state["messages"])
+        result = safe_llm_invoke(chain, state["messages"], "Situation Analyst")
 
         report = ""
         if len(result.tool_calls) == 0:

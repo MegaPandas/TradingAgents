@@ -6,40 +6,17 @@ CLI and ``TradingAgentsGraph.save_reports`` both call this, so a headless / API
 run produces the same on-disk report tree a CLI run does.
 """
 
-import re
 from datetime import datetime
 from pathlib import Path
 
 
-# Risk-debate analysts tag every round of their argument with a literal
-# ``Speaker:`` prefix when appending to history; use that to split the
-# accumulated history into per-round sections so a multi-round (e.g. Deep
-# depth = 5 rounds) report doesn't render as one concatenated blob.
-_ROUND_SPLIT_RE = re.compile(r"(?:^|\n)(?=(?:Aggressive|Conservative|Neutral) Analyst:)")
-
-
-def _render_debater_history(history: str, speaker_label: str) -> str:
-    """Render a risk-debate history as one numbered block per debate round.
-
-    The history field accumulates ``"Speaker: <argument>"`` segments across
-    rounds. When research depth > 1 the same speaker runs multiple times, so
-    we split on the ``Speaker:`` prefix and number each occurrence in order.
-
-    ``speaker_label`` documents which speaker's history is being rendered;
-    unused at the moment but kept on the signature so callers pass it
-    explicitly and the call site stays self-documenting.
-    """
-    del speaker_label  # currently the prefix pattern covers all three labels
-    if not history:
-        return ""
-    # Split on speaker prefix; each segment starts with "Speaker: ...".
-    parts = [p.strip() for p in _ROUND_SPLIT_RE.split(history) if p.strip()]
-    if len(parts) <= 1:
-        return history.strip()
-    rendered = []
-    for idx, part in enumerate(parts, start=1):
-        rendered.append(f"#### Round {idx}\n\n{part}")
-    return "\n\n".join(rendered)
+def _side_text(turns: list[dict], side: str) -> str:
+    """Concatenate one advocate's turns (round-labelled) from the debate transcript."""
+    parts = []
+    for t in turns:
+        if t.get("side") == side:
+            parts.append(f"**Round {t.get('round')}**\n{t.get('delta', '')}")
+    return "\n\n".join(parts)
 
 
 def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
@@ -83,58 +60,61 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## I. Analyst Team Reports\n\n{content}")
 
-    # 2. Research
-    if final_state.get("investment_debate_state"):
+    # 2. Research (simultaneous debate transcript + Research Manager synthesis)
+    research_turns = final_state.get("research_debate_turns") or []
+    investment_plan = final_state.get("investment_plan") or ""
+    if research_turns or investment_plan:
         research_dir = save_path / "2_research"
-        debate = final_state["investment_debate_state"]
         research_parts = []
-        if debate.get("bull_history"):
+        bull_text = _side_text(research_turns, "bull")
+        if bull_text:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "bull.md").write_text(debate["bull_history"], encoding="utf-8")
-            research_parts.append(("Bull Researcher", debate["bull_history"]))
-        if debate.get("bear_history"):
+            (research_dir / "bull.md").write_text(bull_text, encoding="utf-8")
+            research_parts.append(("Bull Researcher", bull_text))
+        bear_text = _side_text(research_turns, "bear")
+        if bear_text:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "bear.md").write_text(debate["bear_history"], encoding="utf-8")
-            research_parts.append(("Bear Researcher", debate["bear_history"]))
-        if debate.get("judge_decision"):
+            (research_dir / "bear.md").write_text(bear_text, encoding="utf-8")
+            research_parts.append(("Bear Researcher", bear_text))
+        if investment_plan:
             research_dir.mkdir(exist_ok=True)
-            (research_dir / "manager.md").write_text(debate["judge_decision"], encoding="utf-8")
-            research_parts.append(("Research Manager", debate["judge_decision"]))
+            (research_dir / "manager.md").write_text(investment_plan, encoding="utf-8")
+            research_parts.append(("Research Manager", investment_plan))
         if research_parts:
             content = "\n\n".join(f"### {name}\n{text}" for name, text in research_parts)
             sections.append(f"## II. Research Team Decision\n\n{content}")
 
-
-    # 4. Risk Management (display III)
-    if final_state.get("risk_debate_state"):
+    # 4. Risk Management (display III — simultaneous debate transcript + Neutral synthesis)
+    risk_turns = final_state.get("risk_debate_turns") or []
+    risk_synthesis = final_state.get("risk_synthesis") or ""
+    if risk_turns or risk_synthesis:
         risk_dir = save_path / "4_risk"
-        risk = final_state["risk_debate_state"]
         risk_parts = []
-        if risk.get("aggressive_history"):
-            aggressive_rendered = _render_debater_history(risk["aggressive_history"], "Aggressive Analyst")
+        aggressive_text = _side_text(risk_turns, "aggressive")
+        if aggressive_text:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "aggressive.md").write_text(aggressive_rendered, encoding="utf-8")
-            risk_parts.append(("Aggressive Analyst", aggressive_rendered))
-        if risk.get("conservative_history"):
-            conservative_rendered = _render_debater_history(risk["conservative_history"], "Conservative Analyst")
+            (risk_dir / "aggressive.md").write_text(aggressive_text, encoding="utf-8")
+            risk_parts.append(("Aggressive Analyst", aggressive_text))
+        conservative_text = _side_text(risk_turns, "conservative")
+        if conservative_text:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "conservative.md").write_text(conservative_rendered, encoding="utf-8")
-            risk_parts.append(("Conservative Analyst", conservative_rendered))
-        if risk.get("neutral_history"):
-            neutral_rendered = _render_debater_history(risk["neutral_history"], "Neutral Analyst")
+            (risk_dir / "conservative.md").write_text(conservative_text, encoding="utf-8")
+            risk_parts.append(("Conservative Analyst", conservative_text))
+        if risk_synthesis:
             risk_dir.mkdir(exist_ok=True)
-            (risk_dir / "neutral.md").write_text(neutral_rendered, encoding="utf-8")
-            risk_parts.append(("Neutral Analyst", neutral_rendered))
+            (risk_dir / "neutral.md").write_text(risk_synthesis, encoding="utf-8")
+            risk_parts.append(("Neutral Analyst", risk_synthesis))
         if risk_parts:
             content = "\n\n".join(f"### {name}\n{text}" for name, text in risk_parts)
             sections.append(f"## III. Risk Management Team Decision\n\n{content}")
 
-        # 5. Portfolio Manager (display IV — final decision)
-        if risk.get("judge_decision"):
-            portfolio_dir = save_path / "5_portfolio"
-            portfolio_dir.mkdir(exist_ok=True)
-            (portfolio_dir / "decision.md").write_text(risk["judge_decision"], encoding="utf-8")
-            sections.append(f"## IV. Portfolio Manager Decision\n\n### Portfolio Manager\n{risk['judge_decision']}")
+    # 5. Portfolio Manager (display IV — final decision)
+    final_trade_decision = final_state.get("final_trade_decision") or ""
+    if final_trade_decision:
+        portfolio_dir = save_path / "5_portfolio"
+        portfolio_dir.mkdir(exist_ok=True)
+        (portfolio_dir / "decision.md").write_text(final_trade_decision, encoding="utf-8")
+        sections.append(f"## IV. Portfolio Manager Decision\n\n### Portfolio Manager\n{final_trade_decision}")
 
 
     # Write consolidated report

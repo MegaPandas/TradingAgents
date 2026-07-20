@@ -199,8 +199,7 @@ def create_portfolio_manager(llm):
     def portfolio_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
 
-        history = state["risk_debate_state"]["history"]
-        risk_debate_state = state["risk_debate_state"]
+        risk_synthesis = state.get("risk_synthesis", "")
         research_plan = state["investment_plan"]
 
         past_context = state.get("past_context", "")
@@ -283,7 +282,7 @@ def create_portfolio_manager(llm):
             f"===== GROWTH ADJUSTMENTS =====\n{growth_overrides}\n\n"
             f"===== DEBATE CONTEXT =====\n"
             f"Research Manager's investment plan: **{research_plan}**\n"
-            f"{lessons_line}Risk Analysts Debate History:\n{history}\n\n"
+            f"{lessons_line}Risk Synthesis (Neutral's EV + sizing):\n{risk_synthesis}\n\n"
             + get_language_instruction()
         )
 
@@ -314,22 +313,6 @@ def create_portfolio_manager(llm):
             tolerance_pct=5.0,
         )
 
-        new_risk_debate_state = {
-            "judge_decision": final_trade_decision,
-            "history": risk_debate_state["history"],
-            "aggressive_history": risk_debate_state["aggressive_history"],
-            "conservative_history": risk_debate_state["conservative_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
-            "latest_speaker": "Judge",
-            "current_aggressive_response": risk_debate_state["current_aggressive_response"],
-            "current_conservative_response": risk_debate_state["current_conservative_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
-            "count": risk_debate_state["count"],
-        }
-
-        return {
-            "risk_debate_state": new_risk_debate_state,
-            "final_trade_decision": final_trade_decision,
-        }
+        return {"final_trade_decision": final_trade_decision}
 
     return portfolio_manager_node

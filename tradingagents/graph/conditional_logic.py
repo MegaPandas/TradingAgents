@@ -11,85 +11,36 @@ class ConditionalLogic:
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
 
+    def _tool_or_clear(self, state: AgentState, tool_key: str, clear_label: str) -> str:
+        """Return the tool node if the last message has pending tool calls,
+        otherwise the message-clear node. Shared by every tooled analyst."""
+        last_message = state["messages"][-1]
+        return tool_key if last_message.tool_calls else clear_label
+
     def should_continue_market(self, state: AgentState):
-        """Determine if market analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_market"
-        return "Msg Clear Market"
+        return self._tool_or_clear(state, "tools_market", "Msg Clear Market")
 
     def should_continue_social(self, state: AgentState):
-        """Determine if sentiment-analyst tool round should continue.
-
-        Method name keeps the legacy ``social`` suffix to match the
-        ``AnalystType.SOCIAL = "social"`` wire value (saved-config
-        back-compat); the returned ``clear_node`` label uses the v0.2.5
-        rename so it matches the node registered by the execution plan.
-        """
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_social"
-        return "Msg Clear Sentiment"
+        """Sentiment analyst wire key kept as ``social`` for saved-config
+        back-compat; the clear label uses the v0.2.5 rename."""
+        return self._tool_or_clear(state, "tools_social", "Msg Clear Sentiment")
 
     def should_continue_news(self, state: AgentState):
-        """Determine if news analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_news"
-        return "Msg Clear News"
+        return self._tool_or_clear(state, "tools_news", "Msg Clear News")
 
     def should_continue_fundamentals(self, state: AgentState):
-        """Determine if fundamentals analysis should continue."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_fundamentals"
-        return "Msg Clear Fundamentals"
+        return self._tool_or_clear(state, "tools_fundamentals", "Msg Clear Fundamentals")
 
     def should_continue_macro_policy(self, state: AgentState):
-        """Determine if macro & policy analysis should continue (tools or clear)."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_macro_policy"
-        return "Msg Clear Macro Policy"
+        return self._tool_or_clear(state, "tools_macro_policy", "Msg Clear Macro Policy")
 
     def should_continue_situation(self, state: AgentState):
-        """Determine if situation analysis should continue (tools or clear)."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_situation"
-        return "Msg Clear Situation"
+        return self._tool_or_clear(state, "tools_situation", "Msg Clear Situation")
 
     def should_continue_business(self, state: AgentState):
-        """Determine if business analysis should continue (tools or clear)."""
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            return "tools_business"
-        return "Msg Clear Business"
+        return self._tool_or_clear(state, "tools_business", "Msg Clear Business")
 
-    def should_continue_debate(self, state: AgentState) -> str:
-        """Determine if debate should continue."""
-
-        if (
-            state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds
-        ):  # 3 rounds of back-and-forth between 2 agents
-            return "Research Manager"
-        if state["investment_debate_state"]["current_response"].startswith("Bull"):
-            return "Bear Researcher"
-        return "Bull Researcher"
-
-    def should_continue_risk_analysis(self, state: AgentState) -> str:
-        """Determine if risk analysis should continue.
-
-        Only Neutral Analyst calls this conditional now.  Aggressive and
-        Conservative each get exactly ONE turn (direct edge to Neutral).
-        Neutral synthesises and always routes to Portfolio Manager.
-        """
-        _ = state  # reserved for future multi-round routing
-        return "Portfolio Manager"
+    # NOTE: research + risk debates are now wired by graph/debate.build_debate
+    # (simultaneous rounds, round-count conditional). The max_debate_rounds /
+    # max_risk_discuss_rounds stored here feed _run_signature (checkpoint
+    # invalidation) and are passed to build_debate from setup_graph.

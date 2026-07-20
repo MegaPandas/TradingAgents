@@ -1,6 +1,7 @@
 from tradingagents.agents.utils.agent_utils import (
     _PIPELINE_PREAMBLE,
     chat_prompt_messages,
+    safe_llm_invoke,
     format_price_context,
     get_indicators,
     get_instrument_context_from_state,
@@ -59,7 +60,7 @@ OUTPUT
 
         chain = prompt | llm.bind_tools(tools)
 
-        result = chain.invoke(state["messages"])
+        result = safe_llm_invoke(chain, state["messages"], "Market Analyst")
 
         report = ""
 

@@ -12,6 +12,7 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.agents.utils.debate_helpers import render_transcript
 
 _RM_SYSTEM = """ROLE
 You are the Research Manager. Adjudicate the bull/bear debate and issue the rating and the strategic actions the trader will act on.
@@ -36,8 +37,7 @@ def create_research_manager(llm):
 
     def research_manager_node(state) -> dict:
         instrument_context = get_instrument_context_from_state(state)
-        history = state["investment_debate_state"].get("history", "")
-        investment_debate_state = state["investment_debate_state"]
+        transcript = render_transcript(state.get("research_debate_turns", []), ("bull", "bear"))
         report_digest = state.get("report_digest") or ""
 
         prompt_template = chat_prompt_messages(
@@ -45,7 +45,7 @@ def create_research_manager(llm):
             current_date="", instrument_context=instrument_context,
             data_block=(
                 f"ANALYST REPORT DIGEST (pre-compressed):\n{report_digest}\n\n"
-                f"DEBATE HISTORY:\n{history}\n\n"
+                f"DEBATE TRANSCRIPT (Bull vs Bear, canonical):\n{transcript}\n\n"
                 + get_language_instruction()
             ),
         )
@@ -61,18 +61,6 @@ def create_research_manager(llm):
             "Research Manager",
         )
 
-        new_investment_debate_state = {
-            "judge_decision": investment_plan,
-            "history": investment_debate_state.get("history", ""),
-            "bear_history": investment_debate_state.get("bear_history", ""),
-            "bull_history": investment_debate_state.get("bull_history", ""),
-            "current_response": investment_plan,
-            "count": investment_debate_state["count"],
-        }
-
-        return {
-            "investment_debate_state": new_investment_debate_state,
-            "investment_plan": investment_plan,
-        }
+        return {"investment_plan": investment_plan}
 
     return research_manager_node

@@ -4,17 +4,14 @@ from typing import Any
 
 import pandas as pd
 
-from tradingagents.agents.utils.agent_states import (
-    InvestDebateState,
-    RiskDebateState,
-)
 from tradingagents.agents.utils.news_data_tools import get_news
+from tradingagents.dataflows.symbol_utils import is_cn_share
 
 
 class Propagator:
     """Handles state initialization and propagation through the graph."""
 
-    def __init__(self, max_recur_limit=100):
+    def __init__(self, max_recur_limit=500):
         """Initialize with configuration parameters."""
         self.max_recur_limit = max_recur_limit
 
@@ -41,34 +38,9 @@ class Propagator:
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
-            "investment_debate_state": InvestDebateState(
-                {
-                    "bull_history": "",
-                    "bear_history": "",
-                    "history": "",
-                    "current_response": "",
-                    "judge_decision": "",
-                    "count": 0,
-                }
-            ),
-            "risk_debate_state": RiskDebateState(
-                {
-                    "aggressive_history": "",
-                    "conservative_history": "",
-                    "neutral_history": "",
-                    "history": "",
-                    "latest_speaker": "",
-                    "current_aggressive_response": "",
-                    "current_conservative_response": "",
-                    "current_neutral_response": "",
-                    "judge_decision": "",
-                    "count": 0,
-                }
-            ),
-            # Separate keys for parallel Aggressive+Conservative (no reducer
-            # possible on nested TypedDict — each debator writes its own key).
-            "aggressive_risk_argument": "",
-            "conservative_risk_argument": "",
+            "research_debate_turns": [],
+            "risk_debate_turns": [],
+            "risk_synthesis": "",
             "market_report": "",
             "fundamentals_report": "",
             "sentiment_report": "",
@@ -88,13 +60,13 @@ class Propagator:
             state["news_block"] = None
 
         # Pre-compute deterministic fair value (5 academic models, no LLM).
-        # The Portfolio Manager MUST anchor to this, not debate scenarios.
-        # calculate_fair_value auto-detects cyclical troughs (TTM EPS <
-        # 85% of FY EPS) and emits a normalized-EPS range automatically —
-        # same code path the Fundamentals Analyst tool uses, so both PM
-        # (via this pre-fetch) and Fundamentals (via get_fair_value tool)
-        # see identical output.  No divergence.
-        # Pre-fetch failure must not abort propagation; PM falls back.
+        # The Portfolio Manager and Fundamentals Analyst both anchor to this
+        # single ``fair_value_block`` (Fundamentals reads it via
+        # ``format_fair_value_block``; there is no longer a get_fair_value
+        # tool), so PM and Fundamentals can never diverge.  Auto-detects
+        # cyclical troughs (TTM EPS < 85% of FY EPS) and emits a
+        # normalized-EPS range.  Pre-fetch failure must not abort propagation;
+        # PM falls back to ""
         try:
             from tradingagents.dataflows.fair_value import calculate_fair_value
             state["fair_value_block"] = calculate_fair_value(state["company_of_interest"])
@@ -112,42 +84,47 @@ class Propagator:
         state["latest_close_realtime_at"] = None
         state["latest_close"] = None
         state["latest_close_settled_at"] = None
-        try:
-            from tradingagents.dataflows.akshare_data import _no_proxy
-            from tradingagents.dataflows.symbol_utils import cn_sina_symbol, cn_code6
-            import akshare as ak
-            ticker = state["company_of_interest"]
-            sina = cn_sina_symbol(ticker)
-            if not sina:
-                code6 = cn_code6(ticker) or ticker.upper()
-                sina = f"sz{code6}"
-            symbol = sina
+        # CN A-shares only: sina minute bars are the intraday/settled source. For
+        # US/crypto/global tickers the snapshots stay None (format_price_context
+        # returns "") — skip the ~410ms ``import akshare`` and two wasted sina
+        # calls with bogus symbols (e.g. ``szAAPL``) that the old code swallowed.
+        if is_cn_share(state["company_of_interest"]):
+            try:
+                from tradingagents.dataflows.akshare_data import _no_proxy
+                from tradingagents.dataflows.symbol_utils import cn_sina_symbol, cn_code6
+                import akshare as ak
+                ticker = state["company_of_interest"]
+                sina = cn_sina_symbol(ticker)
+                if not sina:
+                    code6 = cn_code6(ticker) or ticker.upper()
+                    sina = f"sz{code6}"
+                symbol = sina
 
-            # 1) Realtime intraday (raw, no adjustment) — today's live price.
-            with _no_proxy():
-                rt = ak.stock_zh_a_minute(symbol=symbol, period="60", adjust="")
-            if rt is not None and not rt.empty and "close" in rt.columns:
-                rt = rt.dropna(subset=["close"])
-                if not rt.empty:
-                    state["latest_close_realtime"] = float(rt["close"].iloc[-1])
-                    state["latest_close_realtime_at"] = str(rt["day"].iloc[-1])
+                # 1) Realtime intraday (raw, no adjustment) — today's live price.
+                with _no_proxy():
+                    rt = ak.stock_zh_a_minute(symbol=symbol, period="60", adjust="")
+                if rt is not None and not rt.empty and "close" in rt.columns:
+                    rt = rt.dropna(subset=["close"])
+                    if not rt.empty:
+                        state["latest_close_realtime"] = float(rt["close"].iloc[-1])
+                        state["latest_close_realtime_at"] = str(rt["day"].iloc[-1])
 
-            # 2) Settled daily close (qfq) — last official close; for valuation
-            #    anchoring and 52-week / historical comparisons.
-            with _no_proxy():
-                qf = ak.stock_zh_a_minute(symbol=symbol, period="60", adjust="qfq")
-            if qf is not None and not qf.empty and "close" in qf.columns:
-                qf = qf.dropna(subset=["close"])
-                if not qf.empty:
-                    state["latest_close"] = float(qf["close"].iloc[-1])
-                    state["latest_close_settled_at"] = str(qf["day"].iloc[-1])
+                # 2) Settled daily close (qfq) — last official close; for valuation
+                #    anchoring and 52-week / historical comparisons.
+                with _no_proxy():
+                    qf = ak.stock_zh_a_minute(symbol=symbol, period="60", adjust="qfq")
+                if qf is not None and not qf.empty and "close" in qf.columns:
+                    qf = qf.dropna(subset=["close"])
+                    if not qf.empty:
+                        state["latest_close"] = float(qf["close"].iloc[-1])
+                        state["latest_close_settled_at"] = str(qf["day"].iloc[-1])
 
-            # Prefer realtime for "current price"; fall back to settled.
-            if state["latest_close_realtime"] is None:
-                state["latest_close_realtime"] = state["latest_close"]
-                state["latest_close_realtime_at"] = state["latest_close_settled_at"]
-        except Exception:
-            pass
+                # Prefer realtime for "current price"; fall back to settled.
+                if state["latest_close_realtime"] is None:
+                    state["latest_close_realtime"] = state["latest_close"]
+                    state["latest_close_realtime_at"] = state["latest_close_settled_at"]
+            except Exception:
+                pass
 
         return state
 

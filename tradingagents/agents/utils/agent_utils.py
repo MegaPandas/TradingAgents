@@ -4,10 +4,31 @@ from collections.abc import Mapping
 from typing import Any
 
 import yfinance as yf
-from langchain_core.messages import HumanMessage, RemoveMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.dataflows.symbol_utils import is_cn_share
+
+logger = logging.getLogger(__name__)
+
+
+def safe_llm_invoke(runnable, messages, label: str = "agent"):
+    """Invoke a runnable (LLM or prompt|llm chain) with graceful degradation.
+
+    On any exception (422 content-filter, timeout, rate-limit) logs + returns a
+    fallback ``AIMessage`` with empty content + no tool_calls, so the calling
+    node degrades (empty report / degraded turn) instead of crashing the whole
+    graph. Without this a single provider-side rejection kills the pipeline.
+    """
+    try:
+        return runnable.invoke(messages)
+    except Exception as e:  # noqa: BLE001 — must catch all to degrade
+        logger.warning(
+            "%s invoke failed — degrading (graph continues): %s: %s",
+            label, type(e).__name__, str(e)[:200],
+        )
+        return AIMessage(content=f"({label} analysis unavailable: {type(e).__name__})")
+
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import get_stock_data
@@ -24,10 +45,8 @@ from tradingagents.agents.utils.news_data_tools import (
     get_insider_transactions,
     get_news,
 )
-from tradingagents.agents.utils.prediction_markets_tools import get_prediction_markets
 from tradingagents.agents.utils.report_digest import build_digest
 from tradingagents.agents.utils.web_search_tools import web_search
-from tradingagents.agents.utils.fair_value_tools import get_fair_value
 from tradingagents.agents.utils.technical_indicators_tools import get_indicators
 
 # Public surface: the data tools are imported here so agents and the graph
@@ -43,23 +62,20 @@ __all__ = [
     "get_global_news",
     "get_insider_transactions",
     "get_macro_indicators",
-    "get_prediction_markets",
     "get_verified_market_snapshot",
     "web_search",
-    "get_fair_value",
     "build_instrument_context",
     "resolve_instrument_identity",
     "get_instrument_context_from_state",
     "get_language_instruction",
     "format_fair_value_block",
+    "collect_analyst_reports",
     "price_snapshot_for",
     "_NO_FABRICATED_BASE_RATES",
     "create_msg_delete",
     "chat_prompt_messages",
     "build_digest_for_state",
 ]
-
-logger = logging.getLogger(__name__)
 
 
 # Shared pipeline preamble — byte-identical across all 7 analysts.
@@ -314,6 +330,26 @@ def format_fair_value_block(state: Mapping[str, Any]) -> str:
         "<fair_value>\n"
         f"{fv}\n"
         "</fair_value>\n"
+    )
+
+
+def collect_analyst_reports(state: Mapping[str, Any]) -> str:
+    """Concatenate the seven analyst reports in canonical order.
+
+    Fallback used by the researchers/debators when ``report_digest`` is absent
+    (bare test states). In the live graph the Report Digest node always
+    populates ``report_digest`` first, so this is rarely hit — but keeping the
+    fallback in one place stops the 7-way string concat from being copy-pasted
+    across every researcher and debator.
+    """
+    return (
+        state.get("market_report", "")
+        + state.get("sentiment_report", "")
+        + state.get("news_report", "")
+        + state.get("fundamentals_report", "")
+        + state.get("macro_policy_report", "")
+        + state.get("business_report", "")
+        + state.get("situation_report", "")
     )
 
 

@@ -185,23 +185,5 @@ OUTPUT
 - narrative: per-source breakdown with cited counts/engagement, divergences, themes, catalysts and risks, and a markdown summary table of key signals"""
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatibility shim
-# ---------------------------------------------------------------------------
-def create_social_media_analyst(llm):
-    """Deprecated alias for :func:`create_sentiment_analyst`.
-
-    Kept so existing code that imports ``create_social_media_analyst``
-    continues to work.
-
-    .. deprecated::
-        Import :func:`create_sentiment_analyst` directly instead.
-    """
-    import warnings
-    warnings.warn(
-        "create_social_media_analyst is deprecated and will be removed in a "
-        "future version. Use create_sentiment_analyst instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return create_sentiment_analyst(llm)
+# (The deprecated ``create_social_media_analyst`` alias and its shim module
+# were removed — import ``create_sentiment_analyst`` directly.)

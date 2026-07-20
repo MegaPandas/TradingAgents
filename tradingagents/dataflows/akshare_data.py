@@ -306,13 +306,28 @@ def get_stock_stats_indicators_window(
 # fundamental_data
 # ---------------------------------------------------------------------------
 
+_ABSTRACT_CACHE: dict[str, pd.DataFrame] = {}
+
+
 def _financial_abstract(code: str):
-    """Fetch the full financial-abstract frame (cached per call)."""
+    """Fetch the full financial-abstract frame (cached per code).
+
+    Five consumers read this same eastmoney endpoint in one CN run —
+    ``get_fundamentals`` / ``get_balance_sheet`` / ``get_cashflow`` /
+    ``get_income_statement`` / ``calculate_fair_value``. The abstract is the
+    company's full financial history (date-invariant within reason), so
+    caching by ``code`` collapses 5 round-trips to 1. Only successful
+    fetches are cached; ``NoMarketDataError`` still propagates.
+    """
+    cached = _ABSTRACT_CACHE.get(code)
+    if cached is not None:
+        return cached
     ak = _require_akshare()
     with _no_proxy():
         df = ak.stock_financial_abstract(symbol=code)
     if df is None or df.empty:
         raise NoMarketDataError(code, code, "no financial abstract returned")
+    _ABSTRACT_CACHE[code] = df
     return df
 
 

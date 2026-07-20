@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import statistics
 from datetime import datetime
 
 import pandas as pd
@@ -35,6 +36,20 @@ _DEFAULTS = {
 }
 
 _CURRENCY = "CNY"
+
+
+def _safe_float(v) -> float | None:
+    """Coerce a value to float, returning None on a non-numeric input.
+
+    Shared by ``_compute_cagr`` and ``_extract_financial_metrics._val`` so the
+    eastmoney cells (strings, None, placeholder text) parse through one path.
+    Does NOT handle NaN — callers that need NaN-rejection (``_val``) check
+    ``pd.isna`` first.
+    """
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
 
 
 def _annualize_roe(roe_val: float, period_col: str) -> float:
@@ -64,10 +79,9 @@ def _compute_cagr(abstract: pd.DataFrame, keyword: str) -> float | None:
         return None
     latest = rows[annual_cols[0]].iloc[0]
     oldest = rows[annual_cols[3]].iloc[0]  # 3 years back
-    try:
-        latest_f = float(latest)
-        oldest_f = float(oldest)
-    except (ValueError, TypeError):
+    latest_f = _safe_float(latest)
+    oldest_f = _safe_float(oldest)
+    if latest_f is None or oldest_f is None:
         return None
     if oldest_f <= 0 or latest_f <= 0:
         return None
@@ -98,10 +112,7 @@ def _extract_financial_metrics(abstract: pd.DataFrame) -> dict:
         v = df[col].iloc[0]
         if pd.isna(v):
             return None
-        try:
-            return float(v)
-        except (ValueError, TypeError):
-            return None
+        return _safe_float(v)
 
     eps_rows = _find_rows("稀释每股收益")
     if eps_rows.empty:
@@ -114,7 +125,6 @@ def _extract_financial_metrics(abstract: pd.DataFrame) -> dict:
     growth_rows = _find_rows("营业总收入增长率")
     if growth_rows.empty:
         growth_rows = _find_rows("营业收入增长率")
-    revenue_rows = _find_rows("营业总收入")
 
     annual_cols = [c for c in period_cols if c.endswith("1231")]
     latest_col = period_cols[0]
@@ -308,7 +318,6 @@ def calculate_fair_value(
     if valid_fvs:
         fv_min = min(valid_fvs)
         fv_max = max(valid_fvs)
-        import statistics
         fv_median = statistics.median(valid_fvs)
     else:
         fv_min = fv_max = fv_median = None
