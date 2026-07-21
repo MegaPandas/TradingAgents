@@ -18,8 +18,8 @@ config["quick_think_llm"] = "deepseek-v4-flash"
 config["backend_url"] = "https://api.deepseek.com"
 config["output_language"] = "Chinese"
 config["results_dir"] = "/home/mega/project/reports"
-config["max_debate_rounds"] = 1
-config["max_risk_discuss_rounds"] = 1
+config["max_debate_rounds"] = 2
+config["max_risk_discuss_rounds"] = 2
 config["checkpoint_enabled"] = False
 
 selected = ("market", "social", "news", "fundamentals", "macro_policy", "business", "situation")

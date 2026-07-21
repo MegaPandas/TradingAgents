@@ -48,8 +48,8 @@ from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 from tradingagents.dataflows.symbol_utils import is_cn_share
 
 
-def _seven_days_back(trade_date: str) -> str:
-    return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+def _days_back(trade_date: str, days: int = 7) -> str:
+    return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 def create_sentiment_analyst(llm):
@@ -65,7 +65,6 @@ def create_sentiment_analyst(llm):
     def sentiment_analyst_node(state):
         ticker = state["company_of_interest"]
         end_date = state["trade_date"]
-        start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
 
         # Pre-fetch all sources. Each fetcher degrades gracefully and
@@ -76,17 +75,18 @@ def create_sentiment_analyst(llm):
         # P1 dedup (D3): the news block is pre-fetched once at propagation
         # time and shared with the News analyst; fall back to get_news.func
         # only if the propagator did not populate it (e.g. older graphs).
+        # CN shares: 14-day guba window (posts less frequent than StockTwits).
+        cn = is_cn_share(ticker)
+        start_date = _days_back(end_date, days=14 if cn else 7)
+
         news_block = state.get("news_block")
         if not news_block:
             news_block = get_news.func(ticker, start_date, end_date)
-        if is_cn_share(ticker):
-            # China A-shares: guba is the retail-sentiment source. StockTwits
-            # has no A-share coverage (HTTP 404) and r/stocks won't discuss a
-            # 6-digit CN code — calling them only burns the Reddit 429 backoff
-            # budget, so skip them outright for CN symbols.
+
+        if cn:
             stocktwits_block = "<stocktwits: not applicable to China A-shares>"
             reddit_block = "<reddit: not applicable to China A-shares>"
-            guba_block = fetch_guba_messages(ticker, limit=30)
+            guba_block = fetch_guba_messages(ticker, limit=60)
         else:
             stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
             reddit_block = fetch_reddit_posts(ticker)
